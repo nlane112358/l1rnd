@@ -1,33 +1,36 @@
-package main
+package beacon
 
 import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"strconv"
 	"strings"
 	"time"
+
+	"l1rnd/internal/harvest"
 )
 
 const GenesisSeed = "0000000000000000000000000000000000000000000000000000000000000000"
 
 // Pulse is a verifiable, hash-chained cosmic entropy beacon frame.
 type Pulse struct {
-	Version   string     `json:"version"`
-	Seq       uint64     `json:"seq"`
-	Timestamp string     `json:"timestamp"`
-	PrevSeed  string     `json:"prev_seed"`
-	Seed      string     `json:"seed"`
-	Preimage  string     `json:"preimage"`
-	Telemetry *Telemetry `json:"telemetry"`
+	Version   string             `json:"version"`
+	Seq       uint64             `json:"seq"`
+	Timestamp string             `json:"timestamp"`
+	PrevSeed  string             `json:"prev_seed"`
+	Seed      string             `json:"seed"`
+	Preimage  string             `json:"preimage"`
+	Telemetry *harvest.Telemetry `json:"telemetry"`
 }
 
 // NewPulse constructs a verifiable Pulse from harvested telemetry and the previous seed.
-func NewPulse(seq uint64, ts time.Time, prevSeed string, t *Telemetry) *Pulse {
+func NewPulse(seq uint64, ts time.Time, prevSeed string, t *harvest.Telemetry) *Pulse {
 	if prevSeed == "" {
 		prevSeed = GenesisSeed
 	}
@@ -105,6 +108,38 @@ func (p *Pulse) SeedBytes() ([32]byte, error) {
 	}
 	copy(out[:], raw)
 	return out, nil
+}
+
+// VerifyChain reads a sequence of Pulse JSON objects from r, verifying each pulse's
+// canonical preimage and cryptographic hash chain continuity.
+// It returns the number of verified pulses and the head seed.
+func VerifyChain(r io.Reader) (int, string, error) {
+	dec := json.NewDecoder(r)
+	var (
+		count    int
+		prevSeed string
+	)
+	for {
+		var p Pulse
+		if err := dec.Decode(&p); err != nil {
+			if err == io.EOF {
+				break
+			}
+			return 0, "", err
+		}
+		if err := p.Verify(); err != nil {
+			return 0, "", fmt.Errorf("pulse #%d: %w", p.Seq, err)
+		}
+		if prevSeed != "" && p.PrevSeed != prevSeed {
+			return 0, "", fmt.Errorf("pulse #%d: broken chain: prev_seed=%s, expected=%s", p.Seq, p.PrevSeed, prevSeed)
+		}
+		prevSeed = p.Seed
+		count++
+	}
+	if count == 0 {
+		return 0, "", fmt.Errorf("no pulse JSON found")
+	}
+	return count, prevSeed, nil
 }
 
 func fmtFloat(v *float64) string {

@@ -15,6 +15,9 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"l1rnd/internal/beacon"
+	"l1rnd/internal/harvest"
 )
 
 func main() {
@@ -58,26 +61,26 @@ func main() {
 
 	var (
 		mu     sync.RWMutex
-		latest *Pulse
+		latest *beacon.Pulse
 		seq    uint64
-		prev   = GenesisSeed
+		prev   = beacon.GenesisSeed
 	)
 
-	step := func() (*Pulse, error) {
+	step := func() (*beacon.Pulse, error) {
 		hCtx, cancel := context.WithTimeout(ctx, *timeout)
 		defer cancel()
-		t, err := Harvest(hCtx, client)
+		t, err := harvest.Harvest(hCtx, client)
 		if err != nil {
 			return nil, err
 		}
 		seq++
-		p := NewPulse(seq, time.Now().UTC(), prev, t)
+		p := beacon.NewPulse(seq, time.Now().UTC(), prev, t)
 		prev = p.Seed
 		mu.Lock()
 		latest = p
 		mu.Unlock()
 		if *verbose {
-			FormatSummary(os.Stderr, p)
+			beacon.FormatSummary(os.Stderr, p)
 		}
 		return p, nil
 	}
@@ -134,14 +137,14 @@ func main() {
 	}
 }
 
-func emitOutput(w io.Writer, p *Pulse, jsonOut, rawOut bool, numBytes int, osMix bool, raffle string, k int, worldOut bool) error {
+func emitOutput(w io.Writer, p *beacon.Pulse, jsonOut, rawOut bool, numBytes int, osMix bool, raffle string, k int, worldOut bool) error {
 	seed, err := p.SeedBytes()
 	if err != nil {
 		return err
 	}
 	switch {
 	case rawOut:
-		sr, err := NewStreamReader(seed, osMix)
+		sr, err := beacon.NewStreamReader(seed, osMix)
 		if err != nil {
 			return err
 		}
@@ -152,7 +155,7 @@ func emitOutput(w io.Writer, p *Pulse, jsonOut, rawOut bool, numBytes int, osMix
 		if err != nil {
 			return err
 		}
-		drawn := DrawRaffle(seed, items, k)
+		drawn := beacon.DrawRaffle(seed, items, k)
 		if jsonOut {
 			return writeJSONLine(w, map[string]interface{}{
 				"winners":    drawn,
@@ -166,7 +169,7 @@ func emitOutput(w io.Writer, p *Pulse, jsonOut, rawOut bool, numBytes int, osMix
 		}
 		return nil
 	case worldOut:
-		world := GenerateWorld(seed)
+		world := beacon.GenerateWorld(seed)
 		if jsonOut {
 			return writeJSONLine(w, world)
 		}
@@ -203,38 +206,17 @@ func writeJSONLine(w io.Writer, v interface{}) error {
 }
 
 func runVerify(r io.Reader, errW io.Writer) error {
-	dec := json.NewDecoder(r)
-	var (
-		count    int
-		prevSeed string
-	)
-	for {
-		var p Pulse
-		if err := dec.Decode(&p); err != nil {
-			if err == io.EOF {
-				break
-			}
-			return err
-		}
-		if err := p.Verify(); err != nil {
-			return fmt.Errorf("pulse #%d: %w", p.Seq, err)
-		}
-		if prevSeed != "" && p.PrevSeed != prevSeed {
-			return fmt.Errorf("pulse #%d: broken chain: prev_seed=%s, expected=%s", p.Seq, p.PrevSeed, prevSeed)
-		}
-		prevSeed = p.Seed
-		count++
-	}
-	if count == 0 {
-		return fmt.Errorf("no pulse JSON found on stdin")
+	count, prevSeed, err := beacon.VerifyChain(r)
+	if err != nil {
+		return err
 	}
 	fmt.Fprintf(errW, "verified %d cosmic pulse(s) OK (head %s)\n", count, prevSeed)
 	return nil
 }
 
-func newHTTPServer(addr string, mu *sync.RWMutex, latest **Pulse, osMix bool) *http.Server {
+func newHTTPServer(addr string, mu *sync.RWMutex, latest **beacon.Pulse, osMix bool) *http.Server {
 	mux := http.NewServeMux()
-	getPulse := func() *Pulse {
+	getPulse := func() *beacon.Pulse {
 		mu.RLock()
 		defer mu.RUnlock()
 		return *latest
@@ -263,7 +245,7 @@ func newHTTPServer(addr string, mu *sync.RWMutex, latest **Pulse, osMix bool) *h
 		}
 		p := getPulse()
 		seed, _ := p.SeedBytes()
-		sr, err := NewStreamReader(seed, osMix)
+		sr, err := beacon.NewStreamReader(seed, osMix)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -286,7 +268,7 @@ func newHTTPServer(addr string, mu *sync.RWMutex, latest **Pulse, osMix bool) *h
 		seed, _ := p.SeedBytes()
 		w.Header().Set("Content-Type", "application/json")
 		_ = writeJSONLine(w, map[string]interface{}{
-			"winners":    DrawRaffle(seed, items, k),
+			"winners":    beacon.DrawRaffle(seed, items, k),
 			"pulse_seq":  p.Seq,
 			"pulse_seed": p.Seed,
 			"timestamp":  p.Timestamp,
@@ -297,7 +279,7 @@ func newHTTPServer(addr string, mu *sync.RWMutex, latest **Pulse, osMix bool) *h
 		p := getPulse()
 		seed, _ := p.SeedBytes()
 		w.Header().Set("Content-Type", "application/json")
-		_ = writeJSONLine(w, GenerateWorld(seed))
+		_ = writeJSONLine(w, beacon.GenerateWorld(seed))
 	})
 
 	mux.HandleFunc("/verify", func(w http.ResponseWriter, r *http.Request) {
@@ -305,7 +287,7 @@ func newHTTPServer(addr string, mu *sync.RWMutex, latest **Pulse, osMix bool) *h
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
-		var p Pulse
+		var p beacon.Pulse
 		if err := json.NewDecoder(io.LimitReader(r.Body, 4<<20)).Decode(&p); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return

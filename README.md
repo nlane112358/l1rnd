@@ -35,7 +35,7 @@ The chain anchors at genesis $H_0 = 0^{64}$. Any alteration to observation times
 
 ```bash
 # Build
-go build -o l1rnd .
+go build -o l1rnd ./cmd/l1rnd
 
 # Emit 256-bit cosmic hex digest
 ./l1rnd
@@ -90,6 +90,27 @@ Serve a continuous, verifiable entropy beacon over HTTP:
 | `/raffle?items=a,b&k=1` | `GET` | Verifiable Fisher-Yates draw |
 | `/world` | `GET` | Deterministic procedural world parameters |
 | `/verify` | `POST` | Audit external pulse JSON |
+
+---
+
+### Repository Structure
+
+```
+.
+├── cmd/
+│   └── l1rnd/             # Application CLI entrypoint and HTTP daemon
+│       └── main.go
+├── internal/
+│   ├── beacon/            # Verifiable entropy pulse chaining, verification, and primitives
+│   │   ├── beacon.go
+│   │   └── beacon_test.go
+│   └── harvest/           # Heliospheric telemetry harvesting (NOAA SWPC, NASA DSN, JPL CNEOS)
+│       ├── harvest.go
+│       └── harvest_test.go
+├── go.mod                 # Go module definition
+├── LICENSE                # MIT License
+└── README.md              # Documentation and API reference
+```
 
 ---
 

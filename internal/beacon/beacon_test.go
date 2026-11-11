@@ -1,4 +1,4 @@
-package main
+package beacon
 
 import (
 	"bytes"
@@ -6,6 +6,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"l1rnd/internal/harvest"
 )
 
 func TestPulseVerifyAndChain(t *testing.T) {
@@ -14,8 +16,8 @@ func TestPulseVerifyAndChain(t *testing.T) {
 	spd := 698.8
 	bt := 5.26
 
-	tel := &Telemetry{
-		L1: []L1Sample{{
+	tel := &harvest.Telemetry{
+		L1: []harvest.L1Sample{{
 			TimeTag:     "2026-11-08T10:34:00",
 			Source:      "SOLAR1",
 			Active:      true,
@@ -23,19 +25,19 @@ func TestPulseVerifyAndChain(t *testing.T) {
 			Temperature: &temp,
 			Speed:       &spd,
 		}},
-		L1Mag: []L1MagSample{{
+		L1Mag: []harvest.L1MagSample{{
 			TimeTag: "2026-11-08T10:34:00",
 			Source:  "SOLAR1",
 			Active:  true,
 			Bt:      &bt,
 		}},
 		DSNTime: "1794134265000",
-		DSN: []DSNDish{{
+		DSN: []harvest.DSNDish{{
 			Station:   "mdscc",
 			Name:      "DSS63",
 			Azimuth:   "103",
 			Elevation: "33",
-			Signals: []DSNSignal{{
+			Signals: []harvest.DSNSignal{{
 				Dir:        "down",
 				Spacecraft: "VGR1",
 				Band:       "X",
@@ -44,7 +46,7 @@ func TestPulseVerifyAndChain(t *testing.T) {
 				RTLT:       "173000",
 			}},
 		}},
-		Fireballs: []Fireball{{
+		Fireballs: []harvest.Fireball{{
 			Date:   "2026-10-04 03:14:45",
 			Energy: "5.4",
 			Vel:    "13.8",
@@ -53,7 +55,7 @@ func TestPulseVerifyAndChain(t *testing.T) {
 			Vz:     "2.2",
 			Alt:    "26.9",
 		}},
-		Scout: []ScoutObject{{
+		Scout: []harvest.ScoutObject{{
 			Object: "6L71921",
 			TEphem: "2026-11-08 10:30",
 			VInf:   "28.0",
@@ -82,9 +84,15 @@ func TestPulseVerifyAndChain(t *testing.T) {
 	_ = json.NewEncoder(&stream).Encode(p1)
 	_ = json.NewEncoder(&stream).Encode(p2)
 
-	var errBuf bytes.Buffer
-	if err := runVerify(&stream, &errBuf); err != nil {
-		t.Fatalf("runVerify failed on valid chain: %v", err)
+	count, head, err := VerifyChain(&stream)
+	if err != nil {
+		t.Fatalf("VerifyChain failed on valid chain: %v", err)
+	}
+	if count != 2 {
+		t.Fatalf("expected 2 verified pulses, got %d", count)
+	}
+	if head != p2.Seed {
+		t.Fatalf("expected head seed %s, got %s", p2.Seed, head)
 	}
 
 	// Tamper with telemetry and ensure Verify rejects it.
@@ -96,7 +104,7 @@ func TestPulseVerifyAndChain(t *testing.T) {
 }
 
 func TestStreamRaffleAndWorldDeterminism(t *testing.T) {
-	p := NewPulse(1, time.Unix(1700000000, 0).UTC(), GenesisSeed, &Telemetry{DSNTime: "12345"})
+	p := NewPulse(1, time.Unix(1700000000, 0).UTC(), GenesisSeed, &harvest.Telemetry{DSNTime: "12345"})
 	seed, err := p.SeedBytes()
 	if err != nil {
 		t.Fatal(err)
